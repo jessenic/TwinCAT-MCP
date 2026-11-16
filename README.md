@@ -33,9 +33,14 @@ A few examples of the kind of thing an agent can do once connected, one per scop
   `AXIS_REF` instances. All read-only.
 - **Docs**: "What are MC_MoveAbsolute's inputs?" or "Technical data for EL3004?" —
   `search_beckhoff_docs` finds the Beckhoff Infosys page and `get_beckhoff_doc_page`
-  returns it as text. Needs internet access. Section indexes are cached under
-  `%LOCALAPPDATA%\TwinCatMcp\infosys` (override with `Docs__CacheDirectory`). Section
-  lists and the crawl approach come from [TcKit](https://github.com/georgeturneruk/tckit) (MIT).
+  returns it as text. For software sections (PLC libraries, TwinCAT functions, NC errors)
+  it downloads Beckhoff's per-section Help Viewer package from
+  `help3.twincat3.infosys.beckhoff.com` once (usually a few MB), which gives every page with
+  its exact F1 keyword and works offline afterwards. A newer package is picked up
+  automatically. Hardware sections have no package and are crawled from Infosys. Everything
+  is cached under `%LOCALAPPDATA%\TwinCatMcp\infosys` (override with `Docs__CacheDirectory`).
+  The hardware section list and the crawl approach come from
+  [TcKit](https://github.com/georgeturneruk/tckit) (MIT).
 
 Anything that touches the live runtime — symbol writes, run-state changes, configuration
 downloads — is gated by three safety toggles described next; read/browse/search tools are

@@ -51,6 +51,12 @@ public sealed class BeckhoffDocsTests : IDisposable
             };
             return Task.FromResult(reply);
         }
+
+        public Task<byte[]?> GetBytesAsync(string url, CancellationToken ct)
+        {
+            Requests.Add(url);
+            return Task.FromResult<byte[]?>(null);
+        }
     }
 
     private BeckhoffDocs Create(FakeInfosys fake) => new(fake, _cache, politeDelay: TimeSpan.Zero);
@@ -86,7 +92,8 @@ public sealed class BeckhoffDocsTests : IDisposable
         var index = await docs.GetIndexAsync("tcplclib_tc2_mc2", 50, 6, CancellationToken.None);
 
         Assert.True(firstRequests > 0);
-        Assert.Empty(again.Requests);
+        // Only the package catalog is consulted (a package may have appeared since); no page or menu fetches.
+        Assert.All(again.Requests, r => Assert.Equal(BeckhoffDocs.PackageCatalogUrl, r));
         Assert.True(docs.IsCached("tcplclib_tc2_mc2"));
         Assert.Equal(3, index!.Entries.Count);
     }

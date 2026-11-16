@@ -1,43 +1,64 @@
 using System.Net;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace TwinCatMcp.Docs;
 
-public sealed record DocEntry(string Title, string Url, string? Parent);
-
-public sealed record SectionIndex(string Section, DateTimeOffset CrawledUtc, bool Complete, int Fetches, IReadOnlyList<DocEntry> Entries);
-
-public sealed record DocHit(string Title, string Url, string? Parent, string Section, int Score);
-
-public sealed record DocPage(string Url, string? Title, string Text, bool Truncated, int TotalChars);
+/// <summary>One documentation page. <see cref="Keywords"/> holds the page's F1 keywords (packages only).</summary>
+public sealed record DocEntry(string Title, string Url, string? Parent, IReadOnlyList<string>? Keywords = null);
 
 /// <summary>
-/// Beckhoff Infosys lookup without an external search engine. Infosys page URLs are opaque numeric IDs,
-/// so a section's title-to-URL index is built by walking Infosys's own navigation tree:
-/// <c>content/1033/&lt;section&gt;/index.html</c> carries a <c>primaryid</c> meta tag, and
+/// A section's title index. <see cref="Source"/> is "package" (built from Beckhoff's help package, dated
+/// <see cref="ContentDate"/>) or "crawl" (built by walking the online Infosys menu; null in old caches).
+/// </summary>
+public sealed record SectionIndex(
+    string Section,
+    DateTimeOffset CrawledUtc,
+    bool Complete,
+    int Fetches,
+    IReadOnlyList<DocEntry> Entries,
+    string? Source = null,
+    DateTimeOffset? ContentDate = null);
+
+public sealed record DocHit(string Title, string Url, string? Parent, string Section, int Score, string? Source, DateTimeOffset? ContentDate);
+
+public sealed record DocPage(string Url, string? Title, string Text, bool Truncated, int TotalChars, string Source, DateTimeOffset? ContentDate);
+
+/// <summary>
+/// Beckhoff Infosys lookup without an external search engine.
+///
+/// Preferred source: Beckhoff's Help Viewer packages on help3.twincat3.infosys.beckhoff.com, one CAB per
+/// documentation section (see <see cref="BeckhoffDocs"/>'s package members). A package holds every page of
+/// the section with its title, parent page and F1 keywords, so one download gives an exact, complete index
+/// and the pages themselves, usable offline afterwards.
+///
+/// Fallback for sections without a package (EtherCAT terminals and other hardware): walk Infosys's own
+/// navigation tree. <c>content/1033/&lt;section&gt;/index.html</c> carries a <c>primaryid</c> meta tag, and
 /// <c>english/menu/menu.php?content=../content/1033/&lt;section&gt;/&lt;file&gt;&amp;id=&lt;id&gt;</c> returns
-/// that node's menu with its children. The crawl is bounded (fetches and depth), sequential with a polite
-/// delay, and cached on disk, so only the first lookup in a section is slow. Approach after TcKit's
-/// InfosysNavigator (https://github.com/georgeturneruk/tckit, MIT).
+/// that node's menu with its children. The crawl is bounded (fetches and depth) and sequential with a
+/// polite delay. Approach after TcKit's InfosysNavigator (https://github.com/georgeturneruk/tckit, MIT).
+///
+/// Both kinds of index are cached on disk, so only the first lookup in a section is slow.
 /// </summary>
 public sealed partial class BeckhoffDocs
 {
     public const string InfosysHost = "https://infosys.beckhoff.com";
+    public const string HelpPackageHost = "https://help3.twincat3.infosys.beckhoff.com";
     private const string MenuUrl = InfosysHost + "/english/menu/menu.php";
 
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = false };
 
     private readonly IInfosysFetcher _fetcher;
+    private readonly IPackageExtractor _extractor;
     private readonly string _cacheDirectory;
     private readonly TimeSpan _politeDelay;
     private readonly TimeSpan _cacheLifetime;
     private readonly SemaphoreSlim _crawlLock = new(1, 1);
 
-    public BeckhoffDocs(IInfosysFetcher fetcher, string cacheDirectory, TimeSpan? politeDelay = null, TimeSpan? cacheLifetime = null)
+    public BeckhoffDocs(IInfosysFetcher fetcher, string cacheDirectory, TimeSpan? politeDelay = null, TimeSpan? cacheLifetime = null, IPackageExtractor? extractor = null)
     {
         _fetcher = fetcher;
+        _extractor = extractor ?? new ExpandExePackageExtractor();
         _cacheDirectory = cacheDirectory;
         _politeDelay = politeDelay ?? TimeSpan.FromMilliseconds(150);
         _cacheLifetime = cacheLifetime ?? TimeSpan.FromDays(30);
@@ -45,37 +66,66 @@ public sealed partial class BeckhoffDocs
 
     public string CacheDirectory => _cacheDirectory;
 
+    /// <summary>True for an https URL on Infosys or Beckhoff's help package server.</summary>
     public static bool IsInfosysUrl(string url)
         => Uri.TryCreate(url, UriKind.Absolute, out var uri)
             && uri.Scheme == Uri.UriSchemeHttps
-            && string.Equals(uri.Host, "infosys.beckhoff.com", StringComparison.OrdinalIgnoreCase);
+            && (string.Equals(uri.Host, "infosys.beckhoff.com", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(uri.Host, "help3.twincat3.infosys.beckhoff.com", StringComparison.OrdinalIgnoreCase));
 
     public bool IsCached(string section) => File.Exists(CachePath(section));
 
-    /// <summary>Returns the cached index, crawling the section first when it isn't cached or is stale.</summary>
+    /// <summary>Sections with a cached index, whatever their source.</summary>
+    public IEnumerable<string> CachedSections()
+        => Directory.Exists(_cacheDirectory)
+            ? Directory.EnumerateFiles(_cacheDirectory, "*.json")
+                .Select(Path.GetFileNameWithoutExtension)
+                .OfType<string>()
+                .Where(s => s != "package-catalog" && InfosysSections.IsValidSlug(s))
+                .Order(StringComparer.Ordinal)
+            : [];
+
+    /// <summary>
+    /// Returns the section's index: from cache when fresh, otherwise from its help package, otherwise by
+    /// crawling. A cached package index is rebuilt when the catalog lists a newer package.
+    /// </summary>
     public async Task<SectionIndex?> GetIndexAsync(string section, int maxFetches, int maxDepth, CancellationToken ct)
     {
         if (!InfosysSections.IsValidSlug(section))
             throw new ArgumentException($"'{section}' is not an Infosys section slug (lowercase letters, digits, '_' and '-').", nameof(section));
 
-        if (TryLoad(section) is { } cached && DateTimeOffset.UtcNow - cached.CrawledUtc < _cacheLifetime)
+        if (await TryFreshCacheAsync(section, ct) is { } cached)
             return cached;
 
         await _crawlLock.WaitAsync(ct);
         try
         {
-            if (TryLoad(section) is { } again && DateTimeOffset.UtcNow - again.CrawledUtc < _cacheLifetime)
+            if (await TryFreshCacheAsync(section, ct) is { } again)
                 return again;
 
-            var index = await CrawlAsync(section, maxFetches, maxDepth, ct);
+            var index = await BuildFromPackageAsync(section, ct)
+                ?? await CrawlAsync(section, maxFetches, maxDepth, ct);
             if (index is not null && index.Entries.Count > 0)
                 Save(index);
-            return index;
+            return index ?? TryLoad(section);
         }
         finally
         {
             _crawlLock.Release();
         }
+    }
+
+    private async Task<SectionIndex?> TryFreshCacheAsync(string section, CancellationToken ct)
+    {
+        if (TryLoad(section) is not { } cached || DateTimeOffset.UtcNow - cached.CrawledUtc >= _cacheLifetime)
+            return null;
+
+        var package = await FindPackageAsync(section, ct);
+        if (package is null)
+            return cached;
+
+        // A crawled index is replaced once a package exists; a package index when a newer package is out.
+        return cached.Source == "package" && cached.ContentDate is { } date && package.LastModified <= date ? cached : null;
     }
 
     public static IReadOnlyList<DocHit> Match(SectionIndex index, string query, int maxResults)
@@ -86,29 +136,49 @@ public sealed partial class BeckhoffDocs
             return [];
 
         return index.Entries
-            .Select(e => (Entry: e, Title: Normalize(e.Title), Context: Normalize(e.Parent ?? "")))
-            .Where(x => tokens.All(t => x.Title.Contains(t, StringComparison.Ordinal) || x.Context.Contains(t, StringComparison.Ordinal)))
+            .Select(e => (Entry: e, Title: Normalize(e.Title), Context: Normalize(e.Parent ?? ""),
+                Keywords: (e.Keywords ?? []).Select(Normalize).ToArray()))
+            .Where(x => x.Keywords.Contains(q) || tokens.All(t => x.Title.Contains(t, StringComparison.Ordinal) || x.Context.Contains(t, StringComparison.Ordinal)))
             .Select(x => new DocHit(x.Entry.Title, x.Entry.Url, x.Entry.Parent, index.Section,
-                x.Title == q ? 4 : x.Title.StartsWith(q, StringComparison.Ordinal) ? 3 : tokens.All(t => x.Title.Contains(t, StringComparison.Ordinal)) ? 2 : 1))
+                x.Keywords.Contains(q) ? 5
+                : x.Title == q ? 4
+                : x.Title.StartsWith(q, StringComparison.Ordinal) ? 3
+                : tokens.All(t => x.Title.Contains(t, StringComparison.Ordinal)) ? 2
+                : 1,
+                index.Source ?? "crawl", index.ContentDate))
             .OrderByDescending(h => h.Score)
             .ThenBy(h => h.Title.Length)
             .Take(maxResults)
             .ToArray();
     }
 
+    /// <summary>Returns a page as text: from a downloaded help package when it holds the page, otherwise online.</summary>
     public async Task<DocPage?> GetPageAsync(string url, int maxChars, CancellationToken ct)
     {
         if (!IsInfosysUrl(url))
             throw new ArgumentException($"Only {InfosysHost} pages can be fetched.", nameof(url));
 
-        var html = await _fetcher.GetAsync(url, ct);
+        string? html = null;
+        var source = "online";
+        DateTimeOffset? contentDate = null;
+
+        if (TryParsePageUrl(url) is { } page && ReadPackagePage(page.Section, page.File) is { } local)
+        {
+            html = local;
+            source = "package";
+            contentDate = TryLoad(page.Section)?.ContentDate;
+        }
+
+        html ??= await _fetcher.GetAsync(url, ct);
         if (html is null)
             return null;
 
-        var title = TitleTag().Match(html) is { Success: true } t ? Clean(t.Groups[1].Value) : null;
+        var title = MetaTitle().Match(html) is { Success: true } m ? Clean(m.Groups[1].Value)
+            : TitleTag().Match(html) is { Success: true } t ? Clean(t.Groups[1].Value)
+            : null;
         var text = HtmlToText(html);
         var truncated = text.Length > maxChars;
-        return new DocPage(url, title, truncated ? text[..maxChars] : text, truncated, text.Length);
+        return new DocPage(url, string.IsNullOrEmpty(title) ? null : title, truncated ? text[..maxChars] : text, truncated, text.Length, source, contentDate);
     }
 
     /// <summary>Converts an Infosys page to readable text, keeping table rows as "a | b | c" lines.</summary>
@@ -117,6 +187,7 @@ public sealed partial class BeckhoffDocs
         var body = BodyTag().Match(html) is { Success: true } b ? b.Groups[1].Value : html;
         body = ScriptOrStyle().Replace(body, " ");
         body = CellEnd().Replace(body, " | ");
+        body = SpanEnd().Replace(body, " "); // FB diagrams are adjacent spans ("Execute BOOL", "Position LREAL")
         body = BlockBreak().Replace(body, "\n");
         body = AnyTag().Replace(body, "");
         body = WebUtility.HtmlDecode(body);
@@ -125,6 +196,12 @@ public sealed partial class BeckhoffDocs
             .Select(l => Spaces().Replace(l, " ").Trim().TrimEnd('|').Trim())
             .Where(l => l.Length > 0);
         return string.Join('\n', lines);
+    }
+
+    private static (string Section, string File)? TryParsePageUrl(string url)
+    {
+        var m = PageUrl().Match(url);
+        return m.Success ? (m.Groups[1].Value, m.Groups[2].Value) : null;
     }
 
     private async Task<SectionIndex?> CrawlAsync(string section, int maxFetches, int maxDepth, CancellationToken ct)
@@ -161,7 +238,7 @@ public sealed partial class BeckhoffDocs
                 if (!seen.Add(childFile))
                     continue;
 
-                entries.Add(new DocEntry(childTitle, $"{InfosysHost}/content/1033/{section}/{childFile}", title));
+                entries.Add(new DocEntry(childTitle, PageUrlFor(section, childFile), title));
                 if (depth + 1 < maxDepth && childId is not null)
                     queue.Enqueue((childFile, childId, depth + 1, childTitle));
                 else if (childId is not null)
@@ -169,7 +246,7 @@ public sealed partial class BeckhoffDocs
             }
         }
 
-        return new SectionIndex(section, DateTimeOffset.UtcNow, complete, fetches, entries);
+        return new SectionIndex(section, DateTimeOffset.UtcNow, complete, fetches, entries, Source: "crawl");
     }
 
     /// <summary>In-section links of a menu.php reply as (file, id, title); the section's own index.html is skipped.</summary>
@@ -195,6 +272,8 @@ public sealed partial class BeckhoffDocs
         }
     }
 
+    private static string PageUrlFor(string section, string file) => $"{InfosysHost}/content/1033/{section}/{file}";
+
     private string CachePath(string section) => Path.Combine(_cacheDirectory, section + ".json");
 
     private SectionIndex? TryLoad(string section)
@@ -219,7 +298,7 @@ public sealed partial class BeckhoffDocs
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // A cache write failure only costs a re-crawl next time.
+            // A cache write failure only costs a rebuild next time.
         }
     }
 
@@ -236,6 +315,12 @@ public sealed partial class BeckhoffDocs
     [GeneratedRegex(@"[?&]id=(\d+)")]
     private static partial Regex IdParam();
 
+    [GeneratedRegex(@"^https://infosys\.beckhoff\.com/content/1033/([a-z0-9][a-z0-9_\-]*)/([A-Za-z0-9_\-]+\.html?)(?:[?#].*)?$", RegexOptions.IgnoreCase)]
+    private static partial Regex PageUrl();
+
+    [GeneratedRegex(@"<meta\s+name=""Title""\s+content=""([^""]*)""", RegexOptions.IgnoreCase)]
+    private static partial Regex MetaTitle();
+
     [GeneratedRegex(@"<title[^>]*>(.*?)</title>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex TitleTag();
 
@@ -247,6 +332,9 @@ public sealed partial class BeckhoffDocs
 
     [GeneratedRegex(@"</t[dh]>", RegexOptions.IgnoreCase)]
     private static partial Regex CellEnd();
+
+    [GeneratedRegex(@"</span>", RegexOptions.IgnoreCase)]
+    private static partial Regex SpanEnd();
 
     [GeneratedRegex(@"<br\s*/?>|</?(p|div|tr|li|ul|ol|table|h[1-6]|pre|section|article)\b[^>]*>", RegexOptions.IgnoreCase)]
     private static partial Regex BlockBreak();
