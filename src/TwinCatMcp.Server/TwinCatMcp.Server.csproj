@@ -5,6 +5,7 @@
     <ProjectReference Include="..\TwinCatMcp.Source\TwinCatMcp.Source.csproj" />
     <ProjectReference Include="..\TwinCatMcp.Runtime\TwinCatMcp.Runtime.csproj" />
     <ProjectReference Include="..\TwinCatMcp.Automation\TwinCatMcp.Automation.csproj" />
+    <ProjectReference Include="..\TwinCatMcp.Docs\TwinCatMcp.Docs.csproj" />
   </ItemGroup>
 
   <ItemGroup>

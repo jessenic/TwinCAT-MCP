@@ -42,6 +42,14 @@ builder.Services.AddSingleton<EtherCatDiagnostics>();
 builder.Services.AddSingleton<StaThreadDispatcher>();
 builder.Services.AddSingleton<XaeShellSession>();
 
+// --- Beckhoff Infosys documentation lookup (HTTP only, no TwinCAT dependency) ---
+builder.Services.AddSingleton<TwinCatMcp.Docs.IInfosysFetcher, TwinCatMcp.Docs.HttpInfosysFetcher>();
+builder.Services.AddSingleton(sp => new TwinCatMcp.Docs.BeckhoffDocs(
+    sp.GetRequiredService<TwinCatMcp.Docs.IInfosysFetcher>(),
+    builder.Configuration["Docs:CacheDirectory"] is { Length: > 0 } cacheDir
+        ? cacheDir
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TwinCatMcp", "infosys")));
+
 // WithToolsFromAssembly() defaults to Assembly.GetCallingAssembly() — it does NOT scan referenced
 // assemblies, so each tool-family assembly must be registered explicitly.
 builder.Services
@@ -50,7 +58,8 @@ builder.Services
     .WithToolsFromAssembly(typeof(Program).Assembly)
     .WithToolsFromAssembly(typeof(TwinCatMcp.Source.SourceTools).Assembly)
     .WithToolsFromAssembly(typeof(TwinCatMcp.Runtime.RuntimeTools).Assembly)
-    .WithToolsFromAssembly(typeof(TwinCatMcp.Automation.AutomationTools).Assembly);
+    .WithToolsFromAssembly(typeof(TwinCatMcp.Automation.AutomationTools).Assembly)
+    .WithToolsFromAssembly(typeof(TwinCatMcp.Docs.DocsTools).Assembly);
 
 var host = builder.Build();
 

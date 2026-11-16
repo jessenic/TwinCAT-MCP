@@ -31,6 +31,11 @@ A few examples of the kind of thing an agent can do once connected, one per scop
   `get_ethercat_status` reads slave states, link state and identity from the EtherCAT
   master over ADS; `list_axes` / `get_axis_state` read NC axis state from the PLC's
   `AXIS_REF` instances. All read-only.
+- **Docs**: "What are MC_MoveAbsolute's inputs?" or "Technical data for EL3004?" —
+  `search_beckhoff_docs` finds the Beckhoff Infosys page and `get_beckhoff_doc_page`
+  returns it as text. Needs internet access. Section indexes are cached under
+  `%LOCALAPPDATA%\TwinCatMcp\infosys` (override with `Docs__CacheDirectory`). Section
+  lists and the crawl approach come from [TcKit](https://github.com/georgeturneruk/tckit) (MIT).
 
 Anything that touches the live runtime — symbol writes, run-state changes, configuration
 downloads — is gated by three safety toggles described next; read/browse/search tools are
