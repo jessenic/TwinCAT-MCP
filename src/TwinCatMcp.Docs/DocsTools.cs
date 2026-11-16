@@ -30,14 +30,14 @@ public static class DocsTools
         [Description("Maximum hits to return. Default 20.")] int maxResults = 20,
         CancellationToken cancellationToken = default)
     {
-        var sections = section is not null
-            ? [section]
+        var sections = !string.IsNullOrWhiteSpace(section)
+            ? [section.Trim()]
             : InfosysSections.Candidates(query).Take(3)
                 .Concat(docs.CachedSections())
                 .Distinct()
                 .ToList();
 
-        var hits = new List<DocHit>();
+        var indexes = new List<SectionIndex>();
         var searched = new List<object>();
         foreach (var s in sections)
         {
@@ -48,20 +48,51 @@ public static class DocsTools
                 continue;
             }
 
+            indexes.Add(index);
             searched.Add(new { Section = s, Found = true, Pages = index.Entries.Count, index.Complete, Source = index.Source ?? "crawl", index.ContentDate });
-            hits.AddRange(BeckhoffDocs.Match(index, query, maxResults));
         }
 
-        var ranked = hits.OrderByDescending(h => h.Score).ThenBy(h => h.Title.Length).Take(maxResults).ToArray();
+        var ranked = Search(indexes, query, maxResults);
+        var suggestions = ranked.Length == 0
+            ? SuggestionQueries(query).SelectMany(q => Search(indexes, q, maxResults)).DistinctBy(h => h.Url).Take(10).ToArray()
+            : [];
+
         return Serialize(new
         {
             Query = query,
             Hits = ranked,
+            Suggestions = suggestions.Length > 0 ? suggestions : null,
             Searched = searched,
             Note = ranked.Length == 0
-                ? "No title matched. Try fewer words, another section (list_beckhoff_doc_sections), or pass section explicitly."
+                ? suggestions.Length > 0
+                    ? "No exact match; Suggestions are pages with a similar name. The name may not exist as written."
+                    : "No title matched. Try fewer words, another section (list_beckhoff_doc_sections), or pass section explicitly."
                 : null,
         });
+    }
+
+    private static DocHit[] Search(IEnumerable<SectionIndex> indexes, string query, int maxResults)
+        => indexes.SelectMany(i => BeckhoffDocs.Match(i, query, maxResults))
+            .OrderByDescending(h => h.Score)
+            .ThenBy(h => h.Title.Length)
+            .Take(maxResults)
+            .ToArray();
+
+    /// <summary>
+    /// Looser queries for an identifier that matched nothing: the name without its prefix
+    /// ('NT_GetSystemTime' -> 'GetSystemTime') and the prefix itself ('NT_').
+    /// </summary>
+    public static IEnumerable<string> SuggestionQueries(string query)
+    {
+        var q = query.Trim();
+        var underscore = q.IndexOf('_');
+        if (q.Contains(' ') || underscore <= 0 || underscore >= q.Length - 1)
+            yield break;
+
+        var rest = q[(underscore + 1)..];
+        if (rest.Length >= 4)
+            yield return rest;
+        yield return q[..(underscore + 1)];
     }
 
     [McpServerTool(Name = "get_beckhoff_doc_page"), Description("Fetches one Beckhoff Infosys page (a URL from search_beckhoff_docs) and returns it as plain text, " +

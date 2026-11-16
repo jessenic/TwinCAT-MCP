@@ -141,6 +141,15 @@ public sealed class BeckhoffDocsTests : IDisposable
         => Assert.Equal(expected, InfosysSections.SectionCoversOrder(slug, order));
 
     [Fact]
+    public void Suggestion_queries_drop_and_keep_the_prefix()
+    {
+        Assert.Equal(["GetSystemTime", "NT_"], DocsTools.SuggestionQueries("NT_GetSystemTime"));
+        Assert.Equal(["MC_"], DocsTools.SuggestionQueries("MC_Mov"));
+        Assert.Empty(DocsTools.SuggestionQueries("ADS return codes"));
+        Assert.Empty(DocsTools.SuggestionQueries("GetSystemTime"));
+    }
+
+    [Fact]
     public void Candidates_follow_the_query_shape()
     {
         Assert.Equal("tcplclib_tc2_mc2", InfosysSections.Candidates("MC_MoveAbsolute")[0]);
