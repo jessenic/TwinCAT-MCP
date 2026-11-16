@@ -106,6 +106,26 @@ base times; it never applies isolation directly to the running target.
 For a referenced PLC task, create the real-time task first with `withImage=false`,
 then call `add_plc_task` with the PLC project, task and program names.
 
+### Run TcUnit tests
+
+The PLC project needs the [TcUnit](https://tcunit.org) library and a program that
+calls `TCUNIT_RUN()`. Point the XAE project at a test or simulation target, not
+production.
+
+1. `run_tcunit_tests` with `plcName` (or without it if boot-project autostart is
+   already on). It builds, stops on build errors, activates the configuration,
+   restarts TwinCAT and waits up to `timeoutSeconds` (default 120) for TcUnit's
+   "TESTS FINISHED RUNNING" summary in the XAE error list. It needs `AllowDownloads`
+   and `AllowRuntimeStateChanges` and refuses a target on `Safety:BlockedNetIds`.
+   `dryRun=true` reports the safety decisions only.
+2. The result has totals, `Passed`, each suite and test with its status and assert
+   message, and the `FAILED TEST ...` assertion lines.
+3. `get_tcunit_results` parses whatever is in the error list now (the latest run
+   only), without running anything.
+
+Per-test detail needs TcUnit's extended results (`LogExtendedResults`, on by default
+since TcUnit 1.2). Without them only the totals and failure lines are reported.
+
 ## Verification
 
 Run automated tests without the existing hardware-affecting E2E tests:
