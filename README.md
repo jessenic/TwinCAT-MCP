@@ -24,6 +24,13 @@ A few examples of the kind of thing an agent can do once connected, one per scop
   as they arrive.
 - **Automation**: "Build the project and show me any errors" — the agent drives
   the XAE Shell to build/clean and reports back the resulting error list.
+- **Tests**: "Run the TcUnit tests and tell me what failed" — `run_tcunit_tests`
+  builds, activates and restarts the test target, then returns per-test results
+  (see [AUTOMATION.md](docs/AUTOMATION.md#run-tcunit-tests)).
+- **Diagnostics**: "Which EtherCAT slaves aren't in OP, and why is axis X in error?" —
+  `get_ethercat_status` reads slave states, link state and identity from the EtherCAT
+  master over ADS; `list_axes` / `get_axis_state` read NC axis state from the PLC's
+  `AXIS_REF` instances. All read-only.
 
 Anything that touches the live runtime — symbol writes, run-state changes, configuration
 downloads — is gated by three safety toggles described next; read/browse/search tools are

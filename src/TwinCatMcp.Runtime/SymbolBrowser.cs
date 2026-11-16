@@ -69,6 +69,44 @@ public sealed class SymbolBrowser
             Walk(child, prefix, depthRemaining - 1, results, maxResults);
     }
 
+    /// <summary>
+    /// Finds symbols whose type name matches <paramref name="typeMatch"/>, searching up to
+    /// <paramref name="maxDepth"/> levels below each top-level symbol. A match isn't descended into.
+    /// </summary>
+    public async Task<IReadOnlyList<SymbolInfo>> FindByTypeAsync(Func<string, bool> typeMatch, int maxDepth, int maxResults, CancellationToken ct)
+    {
+        var loader = await GetLoaderAsync(ct);
+        var symbols = (await loader.GetDynamicSymbolsAsync(ct)).Symbols ?? Enumerable.Empty<ISymbol>();
+
+        var results = new List<SymbolInfo>();
+        foreach (var symbol in symbols)
+        {
+            WalkByType(symbol, typeMatch, maxDepth, results, maxResults);
+            if (results.Count >= maxResults)
+                break;
+        }
+
+        return results;
+    }
+
+    private static void WalkByType(ISymbol symbol, Func<string, bool> typeMatch, int depthRemaining, List<SymbolInfo> results, int maxResults)
+    {
+        if (results.Count >= maxResults)
+            return;
+
+        if (symbol.TypeName is { } typeName && typeMatch(typeName))
+        {
+            results.Add(new SymbolInfo(symbol.InstancePath, typeName, string.IsNullOrEmpty(symbol.Comment) ? null : symbol.Comment, symbol.IsReadOnly, symbol.SubSymbols.Count));
+            return;
+        }
+
+        if (depthRemaining <= 0)
+            return;
+
+        foreach (var child in symbol.SubSymbols)
+            WalkByType(child, typeMatch, depthRemaining - 1, results, maxResults);
+    }
+
     /// <summary>Finds a single symbol by its dotted instance path, or null if no such symbol exists.</summary>
     public async Task<ISymbol?> FindSymbolAsync(string instancePath, CancellationToken ct)
     {

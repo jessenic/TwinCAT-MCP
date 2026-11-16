@@ -36,6 +36,7 @@ builder.Services.AddSingleton(_ => new PlcProjectIndex(ResolveProjectRoot()));
 builder.Services.AddSingleton<AdsConnectionManager>();
 builder.Services.AddSingleton<SymbolBrowser>();
 builder.Services.AddSingleton<NotificationHub>();
+builder.Services.AddSingleton<EtherCatDiagnostics>();
 
 // --- Scope 3: XAE Shell automation (COM, Windows-only — see XaeShellSession for the platform guard) ---
 builder.Services.AddSingleton<StaThreadDispatcher>();
