@@ -20,12 +20,36 @@ public sealed class AdsConnectionManagerTargetTests : IDisposable
             File.Delete(_logPath);
     }
 
-    private AdsConnectionManager CreateManager(Action<RuntimeOptions>? configure = null)
+    private AdsConnectionManager CreateManager(Action<RuntimeOptions>? configure = null, params string[] blockedNetIds)
     {
         var options = new RuntimeOptions();
         configure?.Invoke(options);
         var audit = new OperationAuditLog(_logPath, NullLogger<OperationAuditLog>.Instance);
-        return new AdsConnectionManager(Options.Create(options), audit, NullLogger<AdsConnectionManager>.Instance);
+        var safety = new SafetyGate(Options.Create(new SafetyOptions { BlockedNetIds = [.. blockedNetIds] }), audit);
+        return new AdsConnectionManager(Options.Create(options), audit, safety, NullLogger<AdsConnectionManager>.Instance);
+    }
+
+    [Fact]
+    public void SetTarget_refuses_a_blocked_netid_and_keeps_the_previous_default()
+    {
+        var manager = CreateManager(o => o.AmsNetId = "10.0.0.2.1.1", "5.1.2.3.1.1");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => manager.SetTarget("5.1.2.3.1.1", null));
+
+        Assert.Contains("BlockedNetIds", ex.Message);
+        Assert.Equal("10.0.0.2.1.1", manager.CurrentTarget.AmsNetId);
+    }
+
+    [Fact]
+    public async Task EnsureConnected_refuses_a_blocked_target_before_opening_a_connection()
+    {
+        await using var manager = CreateManager(o => o.AmsNetId = "5.1.2.3.1.1", "5.1.2.3.1.1");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnsureConnectedAsync());
+
+        Assert.Contains("BlockedNetIds", ex.Message);
+        Assert.Null(manager.CurrentAddress);
+        Assert.Contains("ConnectAds", File.ReadAllText(_logPath));
     }
 
     [Fact]

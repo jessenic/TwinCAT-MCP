@@ -29,6 +29,38 @@ public sealed class SafetyGateTests : IDisposable
     }
 
     [Fact]
+    public void Blocked_netids_are_normalized_and_split()
+    {
+        var gate = CreateGate(o => o.BlockedNetIds = ["5.1.2.3.1.1, 010.0.0.7.1.1", " 192.168.1.10.1.1 "]);
+
+        Assert.Equal(["5.1.2.3.1.1", "10.0.0.7.1.1", "192.168.1.10.1.1"], gate.BlockedNetIds);
+        Assert.True(gate.IsBlocked("10.0.0.7.1.1"));
+        Assert.False(gate.IsBlocked("127.0.0.1.1.1"));
+        Assert.False(gate.IsBlocked(null));
+    }
+
+    [Fact]
+    public void Invalid_blocked_netid_fails_closed_at_startup()
+    {
+        Assert.Throws<ArgumentException>(() => CreateGate(o => o.BlockedNetIds = ["production-plc"]));
+    }
+
+    [Fact]
+    public void Target_access_denied_and_audited_for_blocked_netid()
+    {
+        var gate = CreateGate(o => o.BlockedNetIds = ["5.1.2.3.1.1"]);
+
+        var denied = gate.CheckTargetAccess("5.1.2.3.1.1", "ConnectAds");
+        var allowed = gate.CheckTargetAccess("5.1.2.3.1.2", "ConnectAds");
+
+        Assert.Equal(SafetyVerdict.Denied, denied.Verdict);
+        Assert.Equal(SafetyVerdict.Allowed, allowed.Verdict);
+        var lines = File.ReadAllLines(_logPath);
+        Assert.Single(lines);
+        Assert.Contains("ConnectAds", lines[0]);
+    }
+
+    [Fact]
     public void Symbol_write_denied_by_default()
     {
         var gate = CreateGate();

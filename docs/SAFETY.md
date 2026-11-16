@@ -38,6 +38,32 @@ They are still **recorded** to the audit log.
 > `AlwaysConfirmAutomationOperations` options are gone. Existing config keys under
 > `Safety:` other than the three toggles are ignored.
 
+## Blocked targets (`BlockedNetIds`)
+
+`Safety:BlockedNetIds` lists AMS Net IDs the server must never touch, typically
+production PLCs. It is **configuration-only**: no tool can change it, so an agent can't
+lift the block. It is independent of the toggles. A listed target is blocked even with
+every toggle on.
+
+```bash
+claude mcp add twincat twincat-mcp --env Safety__BlockedNetIds__0=5.1.2.3.1.1 --env Safety__BlockedNetIds__1=5.1.2.4.1.1
+```
+
+An entry may also hold several IDs separated by commas or semicolons. An entry that is
+not a valid Net ID makes the server fail at the first safety check instead of silently
+ignoring it.
+
+For a listed Net ID the server refuses to:
+
+- open an ADS connection to it (reads, browsing and RPC calls included);
+- make it the session default with `set_runtime_target`;
+- make it the XAE target with `set_xae_target_net_id`;
+- run `activate_configuration`, `restart_twincat` or `set_plc_boot_project` while it is
+  the XAE project's target. When a block list is configured and the XAE target can't be
+  read, these three are refused too (fail closed).
+
+Every refusal is written to the audit log. `get_safety_toggles` reports the list.
+
 ## How a check resolves
 
 `SafetyGate` evaluates each mutating call against exactly one toggle:

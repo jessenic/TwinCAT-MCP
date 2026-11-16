@@ -25,6 +25,8 @@ public static class SafetyTools
             safety.Snapshot().AllowAdsWrites,
             safety.Snapshot().AllowDownloads,
             safety.Snapshot().AllowRuntimeStateChanges,
+            BlockedNetIds = safety.BlockedNetIds,
+            BlockedNetIdsNote = "Targets the server never connects to, makes the default, or activates/restarts/boots via XAE. Configuration-only (Safety__BlockedNetIds__N); no tool can change it.",
         });
 
     [McpServerTool, Description("Changes the safety toggles at runtime for the current session (reset to the configured defaults on server restart). " +

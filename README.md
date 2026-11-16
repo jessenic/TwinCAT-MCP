@@ -36,6 +36,11 @@ three toggles (`AllowAdsWrites`, `AllowDownloads`, `AllowRuntimeStateChanges`) c
 flipped live at runtime via the `set_safety_toggles` tool — no restart needed. See
 [`docs/SAFETY.md`](docs/SAFETY.md) before enabling any of them.
 
+To keep the server away from production PLCs entirely, list their AMS Net IDs in
+`Safety__BlockedNetIds__0`, `__1`, ... The server then refuses to connect to them, make them
+a target, or activate/restart/boot them via XAE. The list is configuration-only, so no tool
+can lift it.
+
 Like the toggles, the default ADS target is changeable live: `set_runtime_target` swaps the
 session default `amsNetId`/`port` (audit-logged, reconnects immediately) and
 `get_runtime_target` reports it. Both reset to the configured `Runtime__AmsNetId` /

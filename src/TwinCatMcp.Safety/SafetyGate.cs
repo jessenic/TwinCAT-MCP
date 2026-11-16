@@ -20,11 +20,77 @@ public sealed class SafetyGate
 {
     private readonly SafetyOptions _options;
     private readonly OperationAuditLog _audit;
+    private readonly IReadOnlyList<string> _blockedNetIds;
 
     public SafetyGate(IOptions<SafetyOptions> options, OperationAuditLog audit)
     {
         _options = options.Value;
         _audit = audit;
+        _blockedNetIds = (_options.BlockedNetIds ?? [])
+            .SelectMany(entry => (entry ?? string.Empty).Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Select(id => TryNormalizeNetId(id) ?? throw new ArgumentException(
+                $"Safety:BlockedNetIds contains '{id}', which is not an AMS Net ID (expected six dot-separated bytes such as '5.1.2.3.1.1')."))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    /// <summary>The configured, normalized list of AMS Net IDs the server refuses to touch. Read-only by design.</summary>
+    public IReadOnlyList<string> BlockedNetIds => _blockedNetIds;
+
+    /// <summary>True when <paramref name="amsNetId"/> is on the configured block list.</summary>
+    public bool IsBlocked(string? amsNetId)
+        => TryNormalizeNetId(amsNetId) is { } normalized && _blockedNetIds.Contains(normalized, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Gate for any operation that reaches a specific target (ADS connect, making it the session default,
+    /// or an XAE download/restart while it is the XAE target). Denied when the target is on
+    /// <see cref="SafetyOptions.BlockedNetIds"/>; denials are audited, allowed checks are not (reads would
+    /// otherwise flood the log).
+    /// </summary>
+    public SafetyDecision CheckTargetAccess(string? amsNetId, string operationName)
+    {
+        if (!IsBlocked(amsNetId))
+            return SafetyDecision.Allow("Target is not on Safety:BlockedNetIds.");
+
+        var decision = SafetyDecision.Deny(
+            $"Target '{TryNormalizeNetId(amsNetId)}' is on Safety:BlockedNetIds — {operationName} is refused. The block list is configuration-only and cannot be changed from a tool.");
+        _audit.Record(operationName, $"target {TryNormalizeNetId(amsNetId)}", decision);
+        return decision;
+    }
+
+    /// <summary>
+    /// Fail-closed denial for an operation whose target couldn't be determined while a block list is
+    /// configured. Audited.
+    /// </summary>
+    public SafetyDecision CheckTargetAccessUnknown(string operationName, string why)
+    {
+        var decision = SafetyDecision.Deny(
+            $"{operationName} is refused: Safety:BlockedNetIds is configured but the target Net ID could not be determined ({why}).");
+        _audit.Record(operationName, "target unknown", decision);
+        return decision;
+    }
+
+    /// <summary>
+    /// Returns the canonical "a.b.c.d.e.f" form of an AMS Net ID (each part a byte, no leading zeros), or
+    /// null when <paramref name="amsNetId"/> isn't one.
+    /// </summary>
+    public static string? TryNormalizeNetId(string? amsNetId)
+    {
+        if (string.IsNullOrWhiteSpace(amsNetId))
+            return null;
+
+        var parts = amsNetId.Trim().Split('.');
+        if (parts.Length != 6)
+            return null;
+
+        var bytes = new byte[6];
+        for (var i = 0; i < 6; i++)
+        {
+            if (!byte.TryParse(parts[i], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out bytes[i]))
+                return null;
+        }
+
+        return string.Join('.', bytes);
     }
 
     /// <summary>Current toggle state — always a snapshot copy, so callers can't mutate the live policy by accident.</summary>

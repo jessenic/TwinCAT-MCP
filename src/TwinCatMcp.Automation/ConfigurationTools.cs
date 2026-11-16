@@ -37,9 +37,13 @@ public static class ConfigurationTools
     public static async Task<string> GetXaeTargetNetId(XaeShellSession session, CancellationToken cancellationToken = default)
         => JsonSerializer.Serialize(new { AmsNetId = await session.GetXaeTargetNetIdAsync(cancellationToken) });
 
-    [McpServerTool, Description("Sets the engineering project's target AMS Net ID without downloading or changing the MCP ADS target. Save afterwards. Audited; dryRun checks policy only.")]
+    [McpServerTool, Description("Sets the engineering project's target AMS Net ID without downloading or changing the MCP ADS target. Refused for a Net ID on Safety:BlockedNetIds. Save afterwards. Audited; dryRun checks policy only.")]
     public static Task<string> SetXaeTargetNetId(XaeShellSession session, SafetyGate safety, string amsNetId, bool dryRun = false, CancellationToken cancellationToken = default)
-        => Mutate(safety, "SetXaeTargetNetId", amsNetId, dryRun, () => session.SetXaeTargetNetIdAsync(amsNetId, cancellationToken));
+    {
+        var access = safety.CheckTargetAccess(amsNetId, "SetXaeTargetNetId");
+        return Mutate(safety, "SetXaeTargetNetId", amsNetId, dryRun, () => session.SetXaeTargetNetIdAsync(amsNetId, cancellationToken),
+            access.IsAllowed ? null : access);
+    }
 
     [McpServerTool, Description("Sets the engineering project's compilation platform: 'TwinCAT OS (ARMV7-A)', 'TwinCAT OS (ARMV7-M)', 'TwinCAT OS (ARMV8-A)', 'TwinCAT OS (x64)', 'TwinCAT OS (x64-E)', 'TwinCAT RT (x64)' or 'TwinCAT RT (x86)'. Does not download. Save afterwards. Audited; dryRun checks policy only.")]
     public static Task<string> SetXaeTargetPlatform(XaeShellSession session, SafetyGate safety, string platform, bool dryRun = false, CancellationToken cancellationToken = default)
@@ -142,8 +146,9 @@ public static class ConfigurationTools
         => Mutate(safety, "AddPlcTask", plcName + ":" + taskName, dryRun, () => session.AddPlcTaskAsync(plcName, taskName, programName, cancellationToken));
 
     [McpServerTool, Description("Sets PLC boot-project autostart and invokes GenerateBootProject(true). Can write boot files to the selected target; requires AllowDownloads. Build first. Audited; dryRun checks policy only.")]
-    public static Task<string> SetPlcBootProject(XaeShellSession session, SafetyGate safety, string plcName, bool autostart, bool dryRun = false, CancellationToken cancellationToken = default)
-        => Mutate(safety, "SetPlcBootProject", plcName, dryRun, () => session.SetPlcBootProjectAsync(plcName, autostart, cancellationToken));
+    public static async Task<string> SetPlcBootProject(XaeShellSession session, SafetyGate safety, string plcName, bool autostart, bool dryRun = false, CancellationToken cancellationToken = default)
+        => await Mutate(safety, "SetPlcBootProject", plcName, dryRun, () => session.SetPlcBootProjectAsync(plcName, autostart, cancellationToken),
+            await XaeTargetGuard.CheckAsync(session, safety, "SetPlcBootProject", cancellationToken));
 
     [McpServerTool, Description("Runs CheckAllObjects on the nested PLC project without downloading. Value contains the compiler's boolean verdict; Succeeded only reports completion of the invocation. Read get_build_errors for diagnostics. Audited; dryRun checks policy only.")]
     public static Task<string> CheckPlcObjects(XaeShellSession session, SafetyGate safety, string plcName, bool dryRun = false, CancellationToken cancellationToken = default)
@@ -153,9 +158,9 @@ public static class ConfigurationTools
     public static Task<string> SetPlcLibraryParameter(XaeShellSession session, SafetyGate safety, string plcName, string libraryItemName, string parameterName, string value, bool dryRun = false, CancellationToken cancellationToken = default)
         => Mutate(safety, "SetPlcLibraryParameter", plcName + ":" + libraryItemName + ":" + parameterName, dryRun, () => session.SetPlcLibraryParameterAsync(plcName, libraryItemName, parameterName, value, cancellationToken));
 
-    private static async Task<string> Mutate<T>(SafetyGate safety, string operation, string subject, bool dryRun, Func<Task<T>> run)
+    private static async Task<string> Mutate<T>(SafetyGate safety, string operation, string subject, bool dryRun, Func<Task<T>> run, SafetyDecision? denial = null)
     {
-        var decision = safety.CheckAutomationOperation(operation, subject);
+        var decision = denial ?? safety.CheckAutomationOperation(operation, subject);
         if (!decision.IsAllowed || dryRun)
             return JsonSerializer.Serialize(new ConfigurationOperationResult(false, decision.IsAllowed, dryRun, decision.Reason, null, null));
         try

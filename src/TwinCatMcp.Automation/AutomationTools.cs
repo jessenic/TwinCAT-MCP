@@ -125,7 +125,8 @@ public static class AutomationTools
         [Description("If true, evaluate the safety decision and report it without activating anything. Default false.")] bool dryRun = false,
         CancellationToken cancellationToken = default)
     {
-        var decision = safety.CheckAutomationOperation("ActivateConfiguration");
+        var decision = await XaeTargetGuard.CheckAsync(session, safety, "ActivateConfiguration", cancellationToken)
+            ?? safety.CheckAutomationOperation("ActivateConfiguration");
         if (!decision.IsAllowed || dryRun)
             return Serialize(new AutomationOperationResult(Applied: false, Succeeded: false, Error: null, decision.Reason, Detail: null));
 
@@ -141,7 +142,8 @@ public static class AutomationTools
         [Description("If true, evaluate the safety decision and report it without restarting anything. Default false.")] bool dryRun = false,
         CancellationToken cancellationToken = default)
     {
-        var decision = safety.CheckAutomationOperation("RestartTwinCat");
+        var decision = await XaeTargetGuard.CheckAsync(session, safety, "RestartTwinCat", cancellationToken)
+            ?? safety.CheckAutomationOperation("RestartTwinCat");
         if (!decision.IsAllowed || dryRun)
             return Serialize(new AutomationOperationResult(Applied: false, Succeeded: false, Error: null, decision.Reason, Detail: null));
 

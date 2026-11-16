@@ -30,4 +30,15 @@ public sealed class SafetyOptions
     /// and <c>restart_twincat</c> (cold runtime restart).
     /// </summary>
     public bool AllowRuntimeStateChanges { get; set; } = false;
+
+    /// <summary>
+    /// AMS Net IDs the server must never touch — typically production PLCs. The server refuses to open an
+    /// ADS connection to a listed target (reads included), refuses to make one the session default, and
+    /// refuses XAE downloads/restarts/boot-project generation while the XAE target is a listed Net ID.
+    ///
+    /// Configuration-only on purpose: unlike the toggles there is no tool to change this list, so an agent
+    /// can't lift the block. Bind as an array (<c>Safety__BlockedNetIds__0=5.1.2.3.1.1</c>); an entry may also
+    /// hold several IDs separated by commas or semicolons.
+    /// </summary>
+    public List<string> BlockedNetIds { get; set; } = [];
 }

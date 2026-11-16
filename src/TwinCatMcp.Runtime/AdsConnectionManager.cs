@@ -22,16 +22,18 @@ public sealed class AdsConnectionManager : IAsyncDisposable
 {
     private readonly RuntimeOptions _options;
     private readonly OperationAuditLog _audit;
+    private readonly SafetyGate _safety;
     private readonly ILogger<AdsConnectionManager> _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     private AdsClient? _client;
     private AmsAddress? _connectedAddress;
 
-    public AdsConnectionManager(IOptions<RuntimeOptions> options, OperationAuditLog audit, ILogger<AdsConnectionManager> logger)
+    public AdsConnectionManager(IOptions<RuntimeOptions> options, OperationAuditLog audit, SafetyGate safety, ILogger<AdsConnectionManager> logger)
     {
         _options = options.Value;
         _audit = audit;
+        _safety = safety;
         _logger = logger;
     }
 
@@ -59,6 +61,10 @@ public sealed class AdsConnectionManager : IAsyncDisposable
             }
             else if (AmsNetId.TryParse(amsNetId, out var parsed))
             {
+                var access = _safety.CheckTargetAccess(parsed.ToString(), "SetRuntimeTarget");
+                if (!access.IsAllowed)
+                    throw new InvalidOperationException(access.Reason);
+
                 _options.AmsNetId = parsed.ToString();
                 changes.Add($"AmsNetId={_options.AmsNetId}");
             }
@@ -93,6 +99,9 @@ public sealed class AdsConnectionManager : IAsyncDisposable
     public async Task<AdsClient> EnsureConnectedAsync(string? amsNetId = null, int? port = null, CancellationToken ct = default)
     {
         var address = ResolveAddress(amsNetId, port);
+        var access = _safety.CheckTargetAccess(address.NetId.ToString(), "ConnectAds");
+        if (!access.IsAllowed)
+            throw new InvalidOperationException(access.Reason);
 
         await _gate.WaitAsync(ct);
         try
